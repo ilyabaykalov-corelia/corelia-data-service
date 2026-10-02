@@ -6,6 +6,8 @@ import java.time.Instant;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.List;
+import java.util.Map;
+import java.util.LinkedHashMap;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
@@ -29,7 +31,6 @@ public class DataDocumentService {
     public JsonNode create(JsonNode body) {
         String id = required(body, "documentId");
         String type = required(body, "typeCode");
-        validateFilter(type, body.path("filter"));
         String status = required(body, "status");
         String actor = required(body, "createdBy");
         String key = required(body, "idempotencyKey");
@@ -105,16 +106,67 @@ public class DataDocumentService {
 
     public JsonNode search(JsonNode body) {
         String type = required(body, "typeCode");
+        validateFilter(type, body.path("filter"));
         int offset = Math.max(0, (int) number(body, "offset", 0));
         int limit = Math.min(10000, Math.max(1, (int) number(body, "limit", 1000)));
-        List<JsonNode> items = jdbc.sql("""
-                select id, type_code, status, current_version, change_token, attributes, created_by, created_at
-                from document where type_code = :type order by created_at desc, id asc offset :offset limit :limit
-                """).param("type", type).param("offset", offset).param("limit", limit).query(this::snapshot).list();
-        long total = jdbc.sql("select count(*) from document where type_code = :type")
-                .param("type", type).query(Long.class).single();
+        QueryClause filter = compileFilter(body.path("filter"), new Counter());
+        String where = "d.type_code = :type" + (filter.sql().isEmpty() ? "" : " and " + filter.sql());
+        JdbcClient.StatementSpec itemsQuery = jdbc.sql("select d.id, d.type_code, d.status, d.current_version, d.change_token, d.attributes, d.created_by, d.created_at from document d where " + where + " order by d.created_at desc, d.id asc offset :offset limit :limit")
+                .param("type", type).param("offset", offset).param("limit", limit);
+        JdbcClient.StatementSpec totalQuery = jdbc.sql("select count(*) from document d where " + where).param("type", type);
+        for (var parameter : filter.parameters().entrySet()) { itemsQuery = itemsQuery.param(parameter.getKey(), parameter.getValue()); totalQuery = totalQuery.param(parameter.getKey(), parameter.getValue()); }
+        List<JsonNode> items = itemsQuery.query(this::snapshot).list();
+        long total = totalQuery.query(Long.class).single();
         return object("items", items, "total", total);
     }
+
+    /** Компилирует разрешённый AST в SQL только с именованными JDBC-параметрами. */
+    private QueryClause compileFilter(JsonNode filter, Counter counter) {
+        if (filter.isMissingNode() || filter.isNull()) return new QueryClause("", Map.of());
+        if (filter.has("field")) return compileComparison(filter, counter);
+        if (filter.has("items")) {
+            var parts = new java.util.ArrayList<String>(); var parameters = new LinkedHashMap<String, Object>();
+            for (JsonNode item : filter.path("items")) { QueryClause part = compileFilter(item, counter); parts.add(part.sql()); parameters.putAll(part.parameters()); }
+            return new QueryClause("(" + String.join(" " + text(filter, "operator") + " ", parts) + ")", parameters);
+        }
+        QueryClause item = compileFilter(filter.path("item"), counter);
+        return new QueryClause("not (" + item.sql() + ")", item.parameters());
+    }
+
+    private QueryClause compileComparison(JsonNode filter, Counter counter) {
+        String field = text(filter, "field"), operator = text(filter, "operator"), fieldKey = "field" + counter.next();
+        var parameters = new LinkedHashMap<String, Object>(); parameters.put(fieldKey, field);
+        String expression = "d.attributes ->> :" + fieldKey;
+        if (operator.equals("EXISTS")) return new QueryClause("d.attributes ? :" + fieldKey, parameters);
+        JsonNode value = filter.path("value");
+        if (operator.equals("IN") || operator.equals("NOT_IN")) {
+            var values = new java.util.ArrayList<String>();
+            for (JsonNode item : list(value)) { String key = "value" + counter.next(); parameters.put(key, scalar(item)); values.add(":" + key); }
+            if (values.isEmpty()) throw new ApiException(400, "Пустой список фильтра");
+            return new QueryClause(expression + (operator.equals("IN") ? " in (" : " not in (") + String.join(",", values) + ")", parameters);
+        }
+        String valueKey = "value" + counter.next(); parameters.put(valueKey, scalar(value));
+        String sql = switch (operator) {
+            case "EQ" -> expression + " = :" + valueKey;
+            case "NE" -> expression + " <> :" + valueKey;
+            case "GT" -> expression + " > :" + valueKey;
+            case "GTE" -> expression + " >= :" + valueKey;
+            case "LT" -> expression + " < :" + valueKey;
+            case "LTE" -> expression + " <= :" + valueKey;
+            case "CONTAINS" -> expression + " ilike '%' || :" + valueKey + " || '%'";
+            case "STARTS_WITH" -> expression + " ilike :" + valueKey + " || '%'";
+            default -> throw new ApiException(400, "Некорректный оператор фильтра");
+        };
+        return new QueryClause(sql, parameters);
+    }
+
+    private static String scalar(JsonNode value) {
+        if (value.isTextual() || value.isNumber() || value.isBoolean()) return value.asString();
+        throw new ApiException(400, "Некорректное значение фильтра");
+    }
+
+    private record QueryClause(String sql, Map<String, Object> parameters) {}
+    private static final class Counter { private int value; int next() { return ++value; } }
 
     public JsonNode type(String id) {
         String type = jdbc.sql("select type_code from document where id = :id").param("id", id).query(String.class).optional()
