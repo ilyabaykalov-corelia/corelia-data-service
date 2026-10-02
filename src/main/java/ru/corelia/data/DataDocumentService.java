@@ -155,7 +155,7 @@ public class DataDocumentService {
             jdbc.sql("update document_version set closed_at = :now where document_id = :id and version_no = :version")
                     .param("now", now).param("id", id).param("version", number(current, "currentVersion", 0)).update();
             jdbc.sql("insert into document_version (id, document_id, version_no, schema_version, status, attributes, created_by, created_at) values (:id, :documentId, :number, :schemaVersion, :status, cast(:attributes as jsonb), :actor, :now)")
-                    .param("id", required(created, "id")).param("documentId", id).param("number", version).param("schemaVersion", number(created, "schemaVersion", 1)).param("status", status).param("attributes", write(attributes)).param("actor", required(created, "createdBy")).param("now", now).update();
+                    .param("id", text(created, "id").isEmpty() ? java.util.UUID.randomUUID().toString() : text(created, "id")).param("documentId", id).param("number", version).param("schemaVersion", number(created, "schemaVersion", 1)).param("status", status).param("attributes", write(attributes)).param("actor", required(created, "createdBy")).param("now", now).update();
         }
         jdbc.sql("update document set status = :status, current_version = :version, change_token = :token, attributes = cast(:attributes as jsonb), updated_by = :actor, updated_at = :now where id = :id")
                 .param("status", status).param("version", created.isObject() ? number(created, "number", 0) : number(current, "currentVersion", 0)).param("token", token).param("attributes", write(attributes)).param("actor", required(body, "actor")).param("now", now).param("id", id).update();
