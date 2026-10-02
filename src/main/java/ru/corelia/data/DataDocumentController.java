@@ -35,4 +35,22 @@ public class DataDocumentController {
     public JsonNode get(@PathVariable String type, @PathVariable String id) {
         return documents.get(type, id);
     }
+
+    @GetMapping("/by-id/{id}/type")
+    public JsonNode type(@PathVariable String id) { return documents.type(id); }
+
+    @GetMapping("/by-id/{id}/versions")
+    public JsonNode versions(@PathVariable String id) { return documents.versions(id); }
+
+    @GetMapping("/by-id/{id}/attachments")
+    public JsonNode attachments(@PathVariable String id) { return documents.attachments(id); }
+
+    @GetMapping("/by-id/{id}/history")
+    public JsonNode history(@PathVariable String id) { return documents.history(id); }
+
+    @GetMapping("/receipts/{key}")
+    public JsonNode receipt(@PathVariable String key) { return documents.receipt(key); }
+
+    @GetMapping("/{type}/{id}/state")
+    public JsonNode state(@PathVariable String type, @PathVariable String id) { return documents.state(type, id); }
 }

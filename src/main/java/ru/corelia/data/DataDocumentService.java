@@ -92,6 +92,78 @@ public class DataDocumentService {
         return object("items", items, "total", total);
     }
 
+    public JsonNode type(String id) {
+        String type = jdbc.sql("select type_code from document where id = :id").param("id", id).query(String.class).optional()
+                .orElseThrow(() -> new ApiException(404, "Документ не найден"));
+        return object("typeCode", type);
+    }
+
+    public JsonNode versions(String id) {
+        requireDocument(id);
+        return object("items", jdbc.sql("""
+                select id, document_id, version_no, schema_version, status, attributes, created_by, created_at, closed_at
+                from document_version where document_id = :id order by version_no asc
+                """).param("id", id).query(this::version).list());
+    }
+
+    public JsonNode attachments(String id) {
+        requireDocument(id);
+        return object("items", attachmentsForCurrentVersion(id));
+    }
+
+    public JsonNode history(String id) {
+        requireDocument(id);
+        return object("items", jdbc.sql("select payload from document_audit where document_id = :id order by occurred_at asc, id asc")
+                .param("id", id).query(String.class).list().stream().map(value -> parse(value)).toList());
+    }
+
+    public JsonNode receipt(String key) {
+        return jdbc.sql("select request_hash, response from idempotency_receipt where idempotency_key = :key").param("key", key)
+                .query((row, ignored) -> object("requestHash", row.getString("request_hash"), "response", parse(row.getString("response"))))
+                .optional().orElse(object("found", false));
+    }
+
+    public JsonNode state(String type, String id) {
+        JsonNode document = get(type, id);
+        var versions = versions(id).path("items");
+        JsonNode current = list(versions).stream().filter(item -> number(item, "number", -1) == number(document, "currentVersion", 0)).findFirst()
+                .orElseThrow(() -> new ApiException(500, "Не найдена текущая версия документа"));
+        return object("document", document, "currentVersion", current, "versions", versions, "attachments", attachmentsForCurrentVersion(id));
+    }
+
+    private JsonNode version(ResultSet row, int ignored) throws SQLException {
+        ObjectNode result = object("id", row.getString("id"), "documentId", row.getString("document_id"),
+                "number", row.getInt("version_no"), "schemaVersion", row.getInt("schema_version"),
+                "status", row.getString("status"), "attributes", parse(row.getString("attributes")),
+                "createdBy", row.getString("created_by"), "createdAt", row.getTimestamp("created_at").toInstant().toString());
+        if (row.getTimestamp("closed_at") != null) result.put("closedAt", row.getTimestamp("closed_at").toInstant().toString());
+        result.set("attachments", array(attachmentsForVersion(row.getString("id"))));
+        return result;
+    }
+
+    private List<JsonNode> attachmentsForCurrentVersion(String documentId) {
+        String versionId = jdbc.sql("select id from document_version where document_id = :id order by version_no desc limit 1")
+                .param("id", documentId).query(String.class).optional().orElseThrow(() -> new ApiException(500, "Не найдена текущая версия документа"));
+        return attachmentsForVersion(versionId);
+    }
+
+    private List<JsonNode> attachmentsForVersion(String versionId) {
+        return jdbc.sql("""
+                select av.id, av.logical_attachment_id, av.document_id, av.file_name, av.content_type, av.size_bytes, av.version_no, av.storage_reference, av.uploaded_at
+                from document_version_attachment dva join attachment_version av on av.id = dva.attachment_version_id
+                where dva.document_version_id = :versionId order by av.logical_attachment_id, av.version_no
+                """).param("versionId", versionId).query((row, ignored) -> {
+                    ObjectNode value = object("id", row.getString("id"), "logicalId", row.getString("logical_attachment_id"),
+                            "documentId", row.getString("document_id"), "fileName", row.getString("file_name"), "contentType", row.getString("content_type"),
+                            "size", row.getLong("size_bytes"), "version", row.getLong("version_no"), "current", true,
+                            "storageReference", row.getString("storage_reference"));
+                    if (row.getTimestamp("uploaded_at") != null) value.put("uploadedAt", row.getTimestamp("uploaded_at").toInstant().toString());
+                    return value;
+                }).list().stream().map(value -> (JsonNode) value).toList();
+    }
+
+    private void requireDocument(String id) { type(id); }
+
     private JsonNode snapshot(ResultSet row, int ignored) throws SQLException {
         ObjectNode result = object("id", row.getString("id"), "typeCode", row.getString("type_code"),
                 "status", row.getString("status"), "currentVersion", row.getInt("current_version"),
