@@ -19,6 +19,8 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import ru.corelia.http.ApiException;
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.ObjectNode;
 
 /** Проверяет native persistence на PostgreSQL с применением production Liquibase schema. */
 @Testcontainers
@@ -77,6 +79,21 @@ class DataDocumentServicePostgresTest {
         assertEquals(2, documents.state("TEST", id).path("document").path("currentVersion").asInt());
     }
 
+    @Test void keepsAttachmentManifestAndAuditInImmutableVersion() {
+        String id = UUID.randomUUID().toString();
+        inTransaction(() -> documents.create(create(id, "create-attachment", "hash-create")));
+        JsonNode state = documents.state("TEST", id);
+        inTransaction(() -> documents.commit("TEST", id,
+                commit(state, "commit-attachment", "hash-attachment", "token-2", attachment())));
+
+        JsonNode current = documents.attachments(id).path("items");
+        assertEquals(1, current.size());
+        assertEquals("attachment-v1", current.get(0).path("id").asString());
+        assertEquals("corelia-blob://attachment-v1", current.get(0).path("storageReference").asString());
+        assertEquals("ATTACHMENT_ADDED", documents.history(id).path("items").get(1).path("action").asString());
+        assertEquals("attachment-v1", documents.versions(id).path("items").get(1).path("attachments").get(0).path("id").asString());
+    }
+
     private static JsonNode create(String id, String key, String hash) {
         return object("documentId", id, "typeCode", "TEST", "status", "CREATED", "createdBy", "tester",
                 "createdAt", "2026-10-02T18:00:00Z", "idempotencyKey", key, "requestHash", hash,
@@ -84,13 +101,25 @@ class DataDocumentServicePostgresTest {
     }
 
     private static JsonNode commit(JsonNode state, String key, String hash, String token) {
-        return object("expectedVersion", state.path("document").path("currentVersion").asInt(),
+        return commit(state, key, hash, token, null);
+    }
+
+    private static JsonNode commit(JsonNode state, String key, String hash, String token, JsonNode attachment) {
+        ObjectNode result = (ObjectNode) object("expectedVersion", state.path("document").path("currentVersion").asInt(),
                 "expectedChangeToken", state.path("document").path("changeToken").asString(),
                 "attributes", object("title", object("value", "Изменён")), "status", "IN_WORK",
                 "idempotencyKey", key, "requestHash", hash, "response", object("changeToken", token),
-                "history", object("action", "UPDATED"), "changeToken", token, "actor", "tester",
+                "history", object("action", attachment == null ? "UPDATED" : "ATTACHMENT_ADDED"), "changeToken", token, "actor", "tester",
                 "createdVersion", object("id", UUID.randomUUID().toString(), "number", 2, "schemaVersion", 1,
                         "createdBy", "tester", "attachments", tools.jackson.databind.json.JsonMapper.builder().build().createArrayNode()));
+        if (attachment != null) ((ArrayNode) result.path("createdVersion").path("attachments")).add(attachment);
+        return result;
+    }
+
+    private static JsonNode attachment() {
+        return object("id", "attachment-v1", "logicalId", "attachment-logical", "documentId", "unused", "fileName", "file.txt",
+                "contentType", "text/plain", "size", 4, "version", 1, "storageReference", "corelia-blob://attachment-v1",
+                "uploadedAt", "2026-10-02T18:00:00Z");
     }
 
     private static JsonNode inTransaction(java.util.concurrent.Callable<JsonNode> action) {
