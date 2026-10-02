@@ -135,7 +135,7 @@ public class DataDocumentService {
     public JsonNode commit(String type, String id, JsonNode body) {
         String key = required(body, "idempotencyKey"), hash = required(body, "requestHash");
         JsonNode prior = receipt(key);
-        if (!prior.path("found").asBoolean()) {
+        if (prior.path("found").asBoolean()) {
             if (!hash.equals(text(prior, "requestHash"))) throw new ApiException(409, "Ключ идемпотентности уже использован для других данных");
             return prior.path("response");
         }
