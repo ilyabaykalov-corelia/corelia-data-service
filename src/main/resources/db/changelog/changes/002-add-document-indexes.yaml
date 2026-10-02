@@ -1,0 +1,30 @@
+databaseChangeLog:
+  - changeSet:
+      id: data-002-add-document-indexes
+      author: corelia
+      changes:
+        - createIndex:
+            tableName: document
+            indexName: ix_document_type_status
+            columns:
+              - column: {name: type_code}
+              - column: {name: status}
+        - createIndex:
+            tableName: document
+            indexName: ix_document_created_at
+            columns:
+              - column: {name: created_at}
+        - createIndex:
+            tableName: document_version
+            indexName: ix_document_version_document_created
+            columns:
+              - column: {name: document_id}
+              - column: {name: created_at}
+        - createIndex:
+            tableName: document_audit
+            indexName: ix_document_audit_document_occurred
+            columns:
+              - column: {name: document_id}
+              - column: {name: occurred_at}
+        - sql:
+            sql: CREATE INDEX ix_document_attributes_gin ON document USING GIN (attributes)
