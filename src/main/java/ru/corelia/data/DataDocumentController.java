@@ -1,6 +1,8 @@
 package ru.corelia.data;
 
 import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -22,5 +24,15 @@ public class DataDocumentController {
     @PostMapping
     public JsonNode create(HttpServletRequest request) {
         return documents.create(requests.body(request));
+    }
+
+    @PostMapping("/search")
+    public JsonNode search(HttpServletRequest request) {
+        return documents.search(requests.body(request));
+    }
+
+    @GetMapping("/{type}/{id}")
+    public JsonNode get(@PathVariable String type, @PathVariable String id) {
+        return documents.get(type, id);
     }
 }

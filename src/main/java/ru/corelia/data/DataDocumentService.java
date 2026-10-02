@@ -3,6 +3,9 @@ package ru.corelia.data;
 import static ru.corelia.support.Json.*;
 
 import java.time.Instant;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.List;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
@@ -66,6 +69,36 @@ public class DataDocumentService {
         jdbc.sql("insert into outbox_event (id, aggregate_type, aggregate_id, event_type, payload, created_at) values (:id, 'document', :documentId, 'DOCUMENT_CREATED', cast(:payload as jsonb), :at)")
                 .param("id", UUID.randomUUID().toString()).param("documentId", id).param("payload", write(history)).param("at", createdAt).update();
         return response;
+    }
+
+    public JsonNode get(String type, String id) {
+        return jdbc.sql("""
+                select id, type_code, status, current_version, change_token, attributes, created_by, created_at
+                from document where id = :id and type_code = :type
+                """).param("id", id).param("type", type).query(this::snapshot).optional()
+                .orElseThrow(() -> new ApiException(404, "Документ не найден"));
+    }
+
+    public JsonNode search(JsonNode body) {
+        String type = required(body, "typeCode");
+        int offset = Math.max(0, (int) number(body, "offset", 0));
+        int limit = Math.min(10000, Math.max(1, (int) number(body, "limit", 1000)));
+        List<JsonNode> items = jdbc.sql("""
+                select id, type_code, status, current_version, change_token, attributes, created_by, created_at
+                from document where type_code = :type order by created_at desc, id asc offset :offset limit :limit
+                """).param("type", type).param("offset", offset).param("limit", limit).query(this::snapshot).list();
+        long total = jdbc.sql("select count(*) from document where type_code = :type")
+                .param("type", type).query(Long.class).single();
+        return object("items", items, "total", total);
+    }
+
+    private JsonNode snapshot(ResultSet row, int ignored) throws SQLException {
+        ObjectNode result = object("id", row.getString("id"), "typeCode", row.getString("type_code"),
+                "status", row.getString("status"), "currentVersion", row.getInt("current_version"),
+                "changeToken", row.getString("change_token"), "createdBy", row.getString("created_by"),
+                "createdAt", row.getTimestamp("created_at").toInstant().toString());
+        result.set("attributes", parse(row.getString("attributes")));
+        return result;
     }
 
     private static String required(JsonNode body, String field) {
