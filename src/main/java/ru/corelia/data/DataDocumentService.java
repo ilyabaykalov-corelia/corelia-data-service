@@ -211,13 +211,12 @@ public class DataDocumentService {
     @Transactional
     public JsonNode commit(String type, String id, JsonNode body) {
         String key = required(body, "idempotencyKey"), hash = required(body, "requestHash");
-        JsonNode prior = receipt(key);
-        if (prior.path("found").asBoolean()) {
-            if (!hash.equals(text(prior, "requestHash"))) throw new ApiException(409, "Ключ идемпотентности уже использован для других данных");
-            return prior.path("response");
-        }
+        JsonNode prior = matchingReceipt(key, hash);
+        if (prior != null) return prior;
         JsonNode current = jdbc.sql("select id, type_code, status, current_version, change_token, attributes, created_by, created_at from document where id = :id and type_code = :type for update")
                 .param("id", id).param("type", type).query(this::snapshot).optional().orElseThrow(() -> new ApiException(404, "Документ не найден"));
+        prior = matchingReceipt(key, hash);
+        if (prior != null) return prior;
         if (number(current, "currentVersion", -1) != number(body, "expectedVersion", -2)
                 || !text(current, "changeToken").equals(text(body, "expectedChangeToken")))
             throw new ApiException(409, "Документ был изменён конкурентно");
@@ -244,6 +243,14 @@ public class DataDocumentService {
         jdbc.sql("insert into idempotency_receipt (idempotency_key, document_id, request_hash, response, created_at) values (:key, :documentId, :hash, cast(:response as jsonb), :now)").param("key", key).param("documentId", id).param("hash", hash).param("response", write(response)).param("now", now).update();
         jdbc.sql("insert into outbox_event (id, aggregate_type, aggregate_id, event_type, payload, created_at) values (:id, 'document', :documentId, 'DOCUMENT_CHANGED', cast(:payload as jsonb), :now)").param("id", java.util.UUID.randomUUID().toString()).param("documentId", id).param("payload", write(history)).param("now", now).update();
         return response;
+    }
+
+    /** Повторная проверка после блокировки строки устраняет гонку одинаковых команд. */
+    private JsonNode matchingReceipt(String key, String hash) {
+        JsonNode prior = receipt(key);
+        if (!prior.path("found").asBoolean()) return null;
+        if (!hash.equals(text(prior, "requestHash"))) throw new ApiException(409, "Ключ идемпотентности уже использован для других данных");
+        return prior.path("response");
     }
 
     private void persistManifest(String documentId, String versionId, JsonNode values, Timestamp now) {
