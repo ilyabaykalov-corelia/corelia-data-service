@@ -2,9 +2,10 @@ package ru.corelia.data;
 
 import static ru.corelia.support.Json.*;
 
-import java.time.Instant;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.LinkedHashMap;
@@ -36,7 +37,7 @@ public class DataDocumentService {
         String key = required(body, "idempotencyKey");
         String hash = required(body, "requestHash");
         ObjectNode attributes = copy(body.path("attributes"));
-        Instant createdAt = instant(body, "createdAt");
+        Timestamp createdAt = Timestamp.from(instant(body, "createdAt"));
 
         String priorHash = jdbc.sql("select request_hash from idempotency_receipt where idempotency_key = :key")
                 .param("key", key).query(String.class).optional().orElse(null);
@@ -224,7 +225,7 @@ public class DataDocumentService {
         String status = text(body, "status"); if (status.isEmpty()) status = text(current, "status");
         String token = required(body, "changeToken");
         JsonNode created = body.path("createdVersion");
-        Instant now = Instant.now();
+        Timestamp now = Timestamp.from(Instant.now());
         if (created.isObject()) {
             int version = (int) number(created, "number", -1);
             if (version != number(current, "currentVersion", 0) + 1) throw new ApiException(409, "Некорректный номер новой версии");
@@ -245,13 +246,13 @@ public class DataDocumentService {
         return response;
     }
 
-    private void persistManifest(String documentId, String versionId, JsonNode values, Instant now) {
+    private void persistManifest(String documentId, String versionId, JsonNode values, Timestamp now) {
         for (JsonNode value : list(values)) {
             String logicalId = required(value, "logicalId"), attachmentId = required(value, "id");
             jdbc.sql("insert into logical_attachment (id, document_id, created_at) values (:id, :documentId, :now) on conflict (id) do nothing")
                     .param("id", logicalId).param("documentId", documentId).param("now", now).update();
             jdbc.sql("insert into attachment_version (id, logical_attachment_id, document_id, version_no, file_name, content_type, size_bytes, storage_reference, uploaded_at) values (:id, :logicalId, :documentId, :number, :fileName, :contentType, :size, :storageReference, :uploadedAt) on conflict (id) do nothing")
-                    .param("id", attachmentId).param("logicalId", logicalId).param("documentId", documentId).param("number", number(value, "version", 1)).param("fileName", required(value, "fileName")).param("contentType", required(value, "contentType")).param("size", number(value, "size", 0)).param("storageReference", required(value, "storageReference")).param("uploadedAt", text(value, "uploadedAt").isEmpty() ? null : instant(value, "uploadedAt")).update();
+                    .param("id", attachmentId).param("logicalId", logicalId).param("documentId", documentId).param("number", number(value, "version", 1)).param("fileName", required(value, "fileName")).param("contentType", required(value, "contentType")).param("size", number(value, "size", 0)).param("storageReference", required(value, "storageReference")).param("uploadedAt", text(value, "uploadedAt").isEmpty() ? null : Timestamp.from(instant(value, "uploadedAt"))).update();
             jdbc.sql("insert into document_version_attachment (document_version_id, attachment_version_id) values (:versionId, :attachmentId) on conflict do nothing")
                     .param("versionId", versionId).param("attachmentId", attachmentId).update();
         }
