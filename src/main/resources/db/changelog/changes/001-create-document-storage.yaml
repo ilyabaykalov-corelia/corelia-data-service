@@ -1,0 +1,146 @@
+databaseChangeLog:
+  - changeSet:
+      id: data-001-create-document-storage
+      author: corelia
+      changes:
+        - createTable:
+            tableName: document
+            columns:
+              - column: {name: id, type: VARCHAR(36), constraints: {nullable: false, primaryKey: true, primaryKeyName: pk_document}}
+              - column: {name: type_code, type: VARCHAR(128), constraints: {nullable: false}}
+              - column: {name: status, type: VARCHAR(128), constraints: {nullable: false}}
+              - column: {name: current_version, type: INT, constraints: {nullable: false}}
+              - column: {name: change_token, type: VARCHAR(64), constraints: {nullable: false}}
+              - column: {name: attributes, type: JSONB, constraints: {nullable: false}}
+              - column: {name: created_by, type: VARCHAR(255), constraints: {nullable: false}}
+              - column: {name: created_at, type: TIMESTAMP WITH TIME ZONE, constraints: {nullable: false}}
+              - column: {name: updated_by, type: VARCHAR(255), constraints: {nullable: false}}
+              - column: {name: updated_at, type: TIMESTAMP WITH TIME ZONE, constraints: {nullable: false}}
+        - createTable:
+            tableName: document_version
+            columns:
+              - column: {name: id, type: VARCHAR(36), constraints: {nullable: false, primaryKey: true, primaryKeyName: pk_document_version}}
+              - column: {name: document_id, type: VARCHAR(36), constraints: {nullable: false}}
+              - column: {name: version_no, type: INT, constraints: {nullable: false}}
+              - column: {name: schema_version, type: INT, constraints: {nullable: false}}
+              - column: {name: status, type: VARCHAR(128), constraints: {nullable: false}}
+              - column: {name: attributes, type: JSONB, constraints: {nullable: false}}
+              - column: {name: created_by, type: VARCHAR(255), constraints: {nullable: false}}
+              - column: {name: created_at, type: TIMESTAMP WITH TIME ZONE, constraints: {nullable: false}}
+              - column: {name: closed_at, type: TIMESTAMP WITH TIME ZONE}
+        - addUniqueConstraint:
+            tableName: document_version
+            columnNames: document_id, version_no
+            constraintName: uq_document_version_number
+        - addForeignKeyConstraint:
+            baseTableName: document_version
+            baseColumnNames: document_id
+            referencedTableName: document
+            referencedColumnNames: id
+            constraintName: fk_document_version_document
+            onDelete: CASCADE
+        - createTable:
+            tableName: logical_attachment
+            columns:
+              - column: {name: id, type: VARCHAR(36), constraints: {nullable: false, primaryKey: true, primaryKeyName: pk_logical_attachment}}
+              - column: {name: document_id, type: VARCHAR(36), constraints: {nullable: false}}
+              - column: {name: created_at, type: TIMESTAMP WITH TIME ZONE, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: logical_attachment
+            baseColumnNames: document_id
+            referencedTableName: document
+            referencedColumnNames: id
+            constraintName: fk_logical_attachment_document
+            onDelete: CASCADE
+        - createTable:
+            tableName: attachment_version
+            columns:
+              - column: {name: id, type: VARCHAR(36), constraints: {nullable: false, primaryKey: true, primaryKeyName: pk_attachment_version}}
+              - column: {name: logical_attachment_id, type: VARCHAR(36), constraints: {nullable: false}}
+              - column: {name: document_id, type: VARCHAR(36), constraints: {nullable: false}}
+              - column: {name: version_no, type: INT, constraints: {nullable: false}}
+              - column: {name: file_name, type: VARCHAR(1024), constraints: {nullable: false}}
+              - column: {name: content_type, type: VARCHAR(255), constraints: {nullable: false}}
+              - column: {name: size_bytes, type: BIGINT, constraints: {nullable: false}}
+              - column: {name: storage_reference, type: VARCHAR(2048), constraints: {nullable: false}}
+              - column: {name: uploaded_at, type: TIMESTAMP WITH TIME ZONE}
+        - addUniqueConstraint:
+            tableName: attachment_version
+            columnNames: logical_attachment_id, version_no
+            constraintName: uq_attachment_version_number
+        - addForeignKeyConstraint:
+            baseTableName: attachment_version
+            baseColumnNames: logical_attachment_id
+            referencedTableName: logical_attachment
+            referencedColumnNames: id
+            constraintName: fk_attachment_version_logical
+            onDelete: CASCADE
+        - addForeignKeyConstraint:
+            baseTableName: attachment_version
+            baseColumnNames: document_id
+            referencedTableName: document
+            referencedColumnNames: id
+            constraintName: fk_attachment_version_document
+            onDelete: CASCADE
+        - createTable:
+            tableName: document_version_attachment
+            columns:
+              - column: {name: document_version_id, type: VARCHAR(36), constraints: {nullable: false}}
+              - column: {name: attachment_version_id, type: VARCHAR(36), constraints: {nullable: false}}
+        - addPrimaryKey:
+            tableName: document_version_attachment
+            columnNames: document_version_id, attachment_version_id
+            constraintName: pk_document_version_attachment
+        - addForeignKeyConstraint:
+            baseTableName: document_version_attachment
+            baseColumnNames: document_version_id
+            referencedTableName: document_version
+            referencedColumnNames: id
+            constraintName: fk_document_version_attachment_version
+            onDelete: CASCADE
+        - addForeignKeyConstraint:
+            baseTableName: document_version_attachment
+            baseColumnNames: attachment_version_id
+            referencedTableName: attachment_version
+            referencedColumnNames: id
+            constraintName: fk_document_version_attachment_attachment
+            onDelete: CASCADE
+        - createTable:
+            tableName: idempotency_receipt
+            columns:
+              - column: {name: idempotency_key, type: VARCHAR(255), constraints: {nullable: false, primaryKey: true, primaryKeyName: pk_idempotency_receipt}}
+              - column: {name: document_id, type: VARCHAR(36), constraints: {nullable: false}}
+              - column: {name: request_hash, type: VARCHAR(128), constraints: {nullable: false}}
+              - column: {name: response, type: JSONB, constraints: {nullable: false}}
+              - column: {name: created_at, type: TIMESTAMP WITH TIME ZONE, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: idempotency_receipt
+            baseColumnNames: document_id
+            referencedTableName: document
+            referencedColumnNames: id
+            constraintName: fk_idempotency_receipt_document
+            onDelete: CASCADE
+        - createTable:
+            tableName: document_audit
+            columns:
+              - column: {name: id, type: VARCHAR(36), constraints: {nullable: false, primaryKey: true, primaryKeyName: pk_document_audit}}
+              - column: {name: document_id, type: VARCHAR(36), constraints: {nullable: false}}
+              - column: {name: payload, type: JSONB, constraints: {nullable: false}}
+              - column: {name: occurred_at, type: TIMESTAMP WITH TIME ZONE, constraints: {nullable: false}}
+        - addForeignKeyConstraint:
+            baseTableName: document_audit
+            baseColumnNames: document_id
+            referencedTableName: document
+            referencedColumnNames: id
+            constraintName: fk_document_audit_document
+            onDelete: CASCADE
+        - createTable:
+            tableName: outbox_event
+            columns:
+              - column: {name: id, type: VARCHAR(36), constraints: {nullable: false, primaryKey: true, primaryKeyName: pk_outbox_event}}
+              - column: {name: aggregate_type, type: VARCHAR(128), constraints: {nullable: false}}
+              - column: {name: aggregate_id, type: VARCHAR(36), constraints: {nullable: false}}
+              - column: {name: event_type, type: VARCHAR(128), constraints: {nullable: false}}
+              - column: {name: payload, type: JSONB, constraints: {nullable: false}}
+              - column: {name: created_at, type: TIMESTAMP WITH TIME ZONE, constraints: {nullable: false}}
+              - column: {name: published_at, type: TIMESTAMP WITH TIME ZONE}
