@@ -11,6 +11,7 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import ru.corelia.http.ApiException;
+import ru.corelia.configuration.DocumentTypeCatalog;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -18,15 +19,17 @@ import tools.jackson.databind.node.ObjectNode;
 @Service
 public class DataDocumentService {
     private final JdbcClient jdbc;
+    private final DocumentTypeCatalog types;
 
-    public DataDocumentService(JdbcClient jdbc) {
-        this.jdbc = jdbc;
+    public DataDocumentService(JdbcClient jdbc, DocumentTypeCatalog types) {
+        this.jdbc = jdbc; this.types = types;
     }
 
     @Transactional
     public JsonNode create(JsonNode body) {
         String id = required(body, "documentId");
         String type = required(body, "typeCode");
+        validateFilter(type, body.path("filter"));
         String status = required(body, "status");
         String actor = required(body, "createdBy");
         String key = required(body, "idempotencyKey");
@@ -69,6 +72,27 @@ public class DataDocumentService {
         jdbc.sql("insert into outbox_event (id, aggregate_type, aggregate_id, event_type, payload, created_at) values (:id, 'document', :documentId, 'DOCUMENT_CREATED', cast(:payload as jsonb), :at)")
                 .param("id", UUID.randomUUID().toString()).param("documentId", id).param("payload", write(history)).param("at", createdAt).update();
         return response;
+    }
+
+    private void validateFilter(String type, JsonNode filter) {
+        if (filter.isMissingNode() || filter.isNull()) return;
+        if (!filter.isObject()) throw new ApiException(400, "Некорректный фильтр поиска");
+        if (filter.has("field")) {
+            String field = required(filter, "field");
+            if (!types.fields(type).contains(field)) throw new ApiException(400, "Поле фильтра не входит в schema документа");
+            String operator = required(filter, "operator");
+            if (!java.util.Set.of("EQ", "NE", "GT", "GTE", "LT", "LTE", "IN", "NOT_IN", "EXISTS", "CONTAINS", "STARTS_WITH").contains(operator))
+                throw new ApiException(400, "Неизвестный оператор фильтра");
+            return;
+        }
+        if (filter.has("items")) {
+            String operator = required(filter, "operator");
+            if (!java.util.Set.of("AND", "OR").contains(operator) || !filter.path("items").isArray()) throw new ApiException(400, "Некорректная группа фильтра");
+            for (JsonNode item : filter.path("items")) validateFilter(type, item);
+            return;
+        }
+        if (filter.has("item")) { validateFilter(type, filter.path("item")); return; }
+        throw new ApiException(400, "Некорректный фильтр поиска");
     }
 
     public JsonNode get(String type, String id) {
