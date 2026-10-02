@@ -53,4 +53,9 @@ public class DataDocumentController {
 
     @GetMapping("/{type}/{id}/state")
     public JsonNode state(@PathVariable String type, @PathVariable String id) { return documents.state(type, id); }
+
+    @PostMapping("/{type}/{id}/commits")
+    public JsonNode commit(@PathVariable String type, @PathVariable String id, HttpServletRequest request) {
+        return documents.commit(type, id, requests.body(request));
+    }
 }

@@ -119,7 +119,7 @@ public class DataDocumentService {
 
     public JsonNode receipt(String key) {
         return jdbc.sql("select request_hash, response from idempotency_receipt where idempotency_key = :key").param("key", key)
-                .query((row, ignored) -> object("requestHash", row.getString("request_hash"), "response", parse(row.getString("response"))))
+                .query((row, ignored) -> object("found", true, "requestHash", row.getString("request_hash"), "response", parse(row.getString("response"))))
                 .optional().orElse(object("found", false));
     }
 
@@ -129,6 +129,42 @@ public class DataDocumentService {
         JsonNode current = list(versions).stream().filter(item -> number(item, "number", -1) == number(document, "currentVersion", 0)).findFirst()
                 .orElseThrow(() -> new ApiException(500, "Не найдена текущая версия документа"));
         return object("document", document, "currentVersion", current, "versions", versions, "attachments", attachmentsForCurrentVersion(id));
+    }
+
+    @Transactional
+    public JsonNode commit(String type, String id, JsonNode body) {
+        String key = required(body, "idempotencyKey"), hash = required(body, "requestHash");
+        JsonNode prior = receipt(key);
+        if (!prior.path("found").asBoolean()) {
+            if (!hash.equals(text(prior, "requestHash"))) throw new ApiException(409, "Ключ идемпотентности уже использован для других данных");
+            return prior.path("response");
+        }
+        JsonNode current = jdbc.sql("select id, type_code, status, current_version, change_token, attributes, created_by, created_at from document where id = :id and type_code = :type for update")
+                .param("id", id).param("type", type).query(this::snapshot).optional().orElseThrow(() -> new ApiException(404, "Документ не найден"));
+        if (number(current, "currentVersion", -1) != number(body, "expectedVersion", -2)
+                || !text(current, "changeToken").equals(text(body, "expectedChangeToken")))
+            throw new ApiException(409, "Документ был изменён конкурентно");
+        ObjectNode attributes = copy(body.path("attributes"));
+        String status = text(body, "status"); if (status.isEmpty()) status = text(current, "status");
+        String token = required(body, "changeToken");
+        JsonNode created = body.path("createdVersion");
+        Instant now = Instant.now();
+        if (created.isObject()) {
+            int version = (int) number(created, "number", -1);
+            if (version != number(current, "currentVersion", 0) + 1) throw new ApiException(409, "Некорректный номер новой версии");
+            jdbc.sql("update document_version set closed_at = :now where document_id = :id and version_no = :version")
+                    .param("now", now).param("id", id).param("version", number(current, "currentVersion", 0)).update();
+            jdbc.sql("insert into document_version (id, document_id, version_no, schema_version, status, attributes, created_by, created_at) values (:id, :documentId, :number, :schemaVersion, :status, cast(:attributes as jsonb), :actor, :now)")
+                    .param("id", required(created, "id")).param("documentId", id).param("number", version).param("schemaVersion", number(created, "schemaVersion", 1)).param("status", status).param("attributes", write(attributes)).param("actor", required(created, "createdBy")).param("now", now).update();
+        }
+        jdbc.sql("update document set status = :status, current_version = :version, change_token = :token, attributes = cast(:attributes as jsonb), updated_by = :actor, updated_at = :now where id = :id")
+                .param("status", status).param("version", created.isObject() ? number(created, "number", 0) : number(current, "currentVersion", 0)).param("token", token).param("attributes", write(attributes)).param("actor", required(body, "actor")).param("now", now).param("id", id).update();
+        JsonNode history = body.path("history").isObject() ? body.path("history") : object("action", "DOCUMENT_CHANGED");
+        JsonNode response = body.path("response").isObject() ? body.path("response") : object();
+        jdbc.sql("insert into document_audit (id, document_id, payload, occurred_at) values (:id, :documentId, cast(:payload as jsonb), :now)").param("id", java.util.UUID.randomUUID().toString()).param("documentId", id).param("payload", write(history)).param("now", now).update();
+        jdbc.sql("insert into idempotency_receipt (idempotency_key, document_id, request_hash, response, created_at) values (:key, :documentId, :hash, cast(:response as jsonb), :now)").param("key", key).param("documentId", id).param("hash", hash).param("response", write(response)).param("now", now).update();
+        jdbc.sql("insert into outbox_event (id, aggregate_type, aggregate_id, event_type, payload, created_at) values (:id, 'document', :documentId, 'DOCUMENT_CHANGED', cast(:payload as jsonb), :now)").param("id", java.util.UUID.randomUUID().toString()).param("documentId", id).param("payload", write(history)).param("now", now).update();
+        return response;
     }
 
     private JsonNode version(ResultSet row, int ignored) throws SQLException {
