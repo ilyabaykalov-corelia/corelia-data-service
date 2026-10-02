@@ -228,11 +228,12 @@ public class DataDocumentService {
         if (created.isObject()) {
             int version = (int) number(created, "number", -1);
             if (version != number(current, "currentVersion", 0) + 1) throw new ApiException(409, "Некорректный номер новой версии");
+            String versionId = text(created, "id").isEmpty() ? java.util.UUID.randomUUID().toString() : text(created, "id");
             jdbc.sql("update document_version set closed_at = :now where document_id = :id and version_no = :version")
                     .param("now", now).param("id", id).param("version", number(current, "currentVersion", 0)).update();
             jdbc.sql("insert into document_version (id, document_id, version_no, schema_version, status, attributes, created_by, created_at) values (:id, :documentId, :number, :schemaVersion, :status, cast(:attributes as jsonb), :actor, :now)")
-                    .param("id", text(created, "id").isEmpty() ? java.util.UUID.randomUUID().toString() : text(created, "id")).param("documentId", id).param("number", version).param("schemaVersion", number(created, "schemaVersion", 1)).param("status", status).param("attributes", write(attributes)).param("actor", required(created, "createdBy")).param("now", now).update();
-            persistManifest(id, text(created, "id"), created.path("attachments"), now);
+                    .param("id", versionId).param("documentId", id).param("number", version).param("schemaVersion", number(created, "schemaVersion", 1)).param("status", status).param("attributes", write(attributes)).param("actor", required(created, "createdBy")).param("now", now).update();
+            persistManifest(id, versionId, created.path("attachments"), now);
         }
         jdbc.sql("update document set status = :status, current_version = :version, change_token = :token, attributes = cast(:attributes as jsonb), updated_by = :actor, updated_at = :now where id = :id")
                 .param("status", status).param("version", created.isObject() ? number(created, "number", 0) : number(current, "currentVersion", 0)).param("token", token).param("attributes", write(attributes)).param("actor", required(body, "actor")).param("now", now).param("id", id).update();
@@ -297,8 +298,8 @@ public class DataDocumentService {
     }
 
     private List<JsonNode> attachmentRow(String where, String id) {
-        return jdbc.sql("select av.id, av.logical_attachment_id, av.document_id, av.file_name, av.content_type, av.size_bytes, av.version_no, av.storage_reference, av.uploaded_at from attachment_version av " + where + " order by av.version_no")
-                .param("id", id).query((row, ignored) -> object("id", row.getString("id"), "logicalId", row.getString("logical_attachment_id"), "documentId", row.getString("document_id"), "fileName", row.getString("file_name"), "contentType", row.getString("content_type"), "size", row.getLong("size_bytes"), "version", row.getLong("version_no"), "current", true, "storageReference", row.getString("storage_reference"), "uploadedAt", row.getTimestamp("uploaded_at") == null ? "" : row.getTimestamp("uploaded_at").toInstant().toString())).list().stream().map(value -> (JsonNode) value).toList();
+        return jdbc.sql("select av.id, av.logical_attachment_id, av.document_id, av.file_name, av.content_type, av.size_bytes, av.version_no, av.storage_reference, av.uploaded_at, exists (select 1 from document_version_attachment dva join document_version dv on dv.id = dva.document_version_id where dva.attachment_version_id = av.id and dv.closed_at is null) as current from attachment_version av " + where + " order by av.version_no")
+                .param("id", id).query((row, ignored) -> object("id", row.getString("id"), "logicalId", row.getString("logical_attachment_id"), "documentId", row.getString("document_id"), "fileName", row.getString("file_name"), "contentType", row.getString("content_type"), "size", row.getLong("size_bytes"), "version", row.getLong("version_no"), "current", row.getBoolean("current"), "storageReference", row.getString("storage_reference"), "uploadedAt", row.getTimestamp("uploaded_at") == null ? "" : row.getTimestamp("uploaded_at").toInstant().toString())).list().stream().map(value -> (JsonNode) value).toList();
     }
 
     private void requireDocument(String id) { type(id); }
