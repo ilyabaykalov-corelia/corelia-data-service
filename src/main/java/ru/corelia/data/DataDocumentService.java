@@ -211,6 +211,20 @@ public class DataDocumentService {
                 }).list().stream().map(value -> (JsonNode) value).toList();
     }
 
+    public JsonNode attachment(String id) {
+        return attachmentRow("where av.id = :id", id).stream().findFirst().orElseThrow(() -> new ApiException(404, "Вложение не найдено"));
+    }
+
+    public JsonNode attachmentVersions(String id) {
+        JsonNode current = attachment(id);
+        return object("items", attachmentRow("where av.logical_attachment_id = :id", text(current, "logicalId")));
+    }
+
+    private List<JsonNode> attachmentRow(String where, String id) {
+        return jdbc.sql("select av.id, av.logical_attachment_id, av.document_id, av.file_name, av.content_type, av.size_bytes, av.version_no, av.storage_reference, av.uploaded_at from attachment_version av " + where + " order by av.version_no")
+                .param("id", id).query((row, ignored) -> object("id", row.getString("id"), "logicalId", row.getString("logical_attachment_id"), "documentId", row.getString("document_id"), "fileName", row.getString("file_name"), "contentType", row.getString("content_type"), "size", row.getLong("size_bytes"), "version", row.getLong("version_no"), "current", true, "storageReference", row.getString("storage_reference"), "uploadedAt", row.getTimestamp("uploaded_at") == null ? "" : row.getTimestamp("uploaded_at").toInstant().toString())).list().stream().map(value -> (JsonNode) value).toList();
+    }
+
     private void requireDocument(String id) { type(id); }
 
     private JsonNode snapshot(ResultSet row, int ignored) throws SQLException {

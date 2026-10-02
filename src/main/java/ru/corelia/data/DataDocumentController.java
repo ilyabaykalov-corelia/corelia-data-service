@@ -58,4 +58,10 @@ public class DataDocumentController {
     public JsonNode commit(@PathVariable String type, @PathVariable String id, HttpServletRequest request) {
         return documents.commit(type, id, requests.body(request));
     }
+
+    @GetMapping("/attachments/{id}")
+    public JsonNode attachment(@PathVariable String id) { return documents.attachment(id); }
+
+    @GetMapping("/attachments/{id}/versions")
+    public JsonNode attachmentVersions(@PathVariable String id) { return documents.attachmentVersions(id); }
 }
