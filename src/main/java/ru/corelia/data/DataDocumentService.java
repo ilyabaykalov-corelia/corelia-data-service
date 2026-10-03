@@ -234,6 +234,15 @@ public class DataDocumentService {
             jdbc.sql("insert into document_version (id, document_id, version_no, schema_version, status, attributes, created_by, created_at) values (:id, :documentId, :number, :schemaVersion, :status, cast(:attributes as jsonb), :actor, :now)")
                     .param("id", versionId).param("documentId", id).param("number", version).param("schemaVersion", number(created, "schemaVersion", 1)).param("status", status).param("attributes", write(attributes)).param("actor", required(created, "createdBy")).param("now", now).update();
             persistManifest(id, versionId, created.path("attachments"), now);
+        } else {
+            String currentVersionId = jdbc.sql("select id from document_version where document_id = :id and version_no = :version")
+                    .param("id", id).param("version", number(current, "currentVersion", 0)).query(String.class).single();
+            String retiredAttachmentId = text(body, "retiredAttachmentId");
+            if (!retiredAttachmentId.isEmpty())
+                jdbc.sql("delete from document_version_attachment where document_version_id = :versionId and attachment_version_id = :attachmentId")
+                        .param("versionId", currentVersionId).param("attachmentId", retiredAttachmentId).update();
+            if (body.path("createdAttachment").isObject())
+                persistAttachment(id, currentVersionId, body.path("createdAttachment"), now);
         }
         jdbc.sql("update document set status = :status, current_version = :version, change_token = :token, attributes = cast(:attributes as jsonb), updated_by = :actor, updated_at = :now where id = :id")
                 .param("status", status).param("version", created.isObject() ? number(created, "number", 0) : number(current, "currentVersion", 0)).param("token", token).param("attributes", write(attributes)).param("actor", required(body, "actor")).param("now", now).param("id", id).update();
@@ -254,15 +263,17 @@ public class DataDocumentService {
     }
 
     private void persistManifest(String documentId, String versionId, JsonNode values, Timestamp now) {
-        for (JsonNode value : list(values)) {
-            String logicalId = required(value, "logicalId"), attachmentId = required(value, "id");
-            jdbc.sql("insert into logical_attachment (id, document_id, created_at) values (:id, :documentId, :now) on conflict (id) do nothing")
-                    .param("id", logicalId).param("documentId", documentId).param("now", now).update();
-            jdbc.sql("insert into attachment_version (id, logical_attachment_id, document_id, version_no, file_name, content_type, size_bytes, storage_reference, uploaded_at) values (:id, :logicalId, :documentId, :number, :fileName, :contentType, :size, :storageReference, :uploadedAt) on conflict (id) do nothing")
-                    .param("id", attachmentId).param("logicalId", logicalId).param("documentId", documentId).param("number", number(value, "version", 1)).param("fileName", required(value, "fileName")).param("contentType", required(value, "contentType")).param("size", number(value, "size", 0)).param("storageReference", required(value, "storageReference")).param("uploadedAt", text(value, "uploadedAt").isEmpty() ? null : Timestamp.from(instant(value, "uploadedAt"))).update();
-            jdbc.sql("insert into document_version_attachment (document_version_id, attachment_version_id) values (:versionId, :attachmentId) on conflict do nothing")
-                    .param("versionId", versionId).param("attachmentId", attachmentId).update();
-        }
+        for (JsonNode value : list(values)) persistAttachment(documentId, versionId, value, now);
+    }
+
+    private void persistAttachment(String documentId, String versionId, JsonNode value, Timestamp now) {
+        String logicalId = required(value, "logicalId"), attachmentId = required(value, "id");
+        jdbc.sql("insert into logical_attachment (id, document_id, created_at) values (:id, :documentId, :now) on conflict (id) do nothing")
+                .param("id", logicalId).param("documentId", documentId).param("now", now).update();
+        jdbc.sql("insert into attachment_version (id, logical_attachment_id, document_id, version_no, file_name, content_type, size_bytes, storage_reference, uploaded_at) values (:id, :logicalId, :documentId, :number, :fileName, :contentType, :size, :storageReference, :uploadedAt) on conflict (id) do nothing")
+                .param("id", attachmentId).param("logicalId", logicalId).param("documentId", documentId).param("number", number(value, "version", 1)).param("fileName", required(value, "fileName")).param("contentType", required(value, "contentType")).param("size", number(value, "size", 0)).param("storageReference", required(value, "storageReference")).param("uploadedAt", text(value, "uploadedAt").isEmpty() ? null : Timestamp.from(instant(value, "uploadedAt"))).update();
+        jdbc.sql("insert into document_version_attachment (document_version_id, attachment_version_id) values (:versionId, :attachmentId) on conflict do nothing")
+                .param("versionId", versionId).param("attachmentId", attachmentId).update();
     }
 
     private JsonNode version(ResultSet row, int ignored) throws SQLException {
