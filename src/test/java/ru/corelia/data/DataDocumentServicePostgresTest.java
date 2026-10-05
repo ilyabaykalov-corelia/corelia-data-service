@@ -119,6 +119,17 @@ class DataDocumentServicePostgresTest {
         assertEquals(400, error.status());
     }
 
+    @Test void searchesAllTypesWithoutTypeCodeWhenNoFilterIsGiven() {
+        String id = UUID.randomUUID().toString();
+        inTransaction(() -> documents.create(create(id, "create-all-types", "hash-all-types")));
+
+        JsonNode result = documents.search(object("limit", 10000));
+
+        boolean found = false;
+        for (JsonNode item : result.path("items")) if (id.equals(item.path("id").asString())) found = true;
+        assertEquals(true, found);
+    }
+
     @Test void rollsBackWholeCommitWhenAttachmentManifestIsInvalid() {
         String id = UUID.randomUUID().toString();
         inTransaction(() -> documents.create(create(id, "create-rollback", "hash-create")));

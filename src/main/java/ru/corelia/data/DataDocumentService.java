@@ -106,15 +106,18 @@ public class DataDocumentService {
     }
 
     public JsonNode search(JsonNode body) {
-        String type = required(body, "typeCode");
-        validateFilter(type, body.path("filter"));
+        String type = text(body, "typeCode");
+        if (type.isBlank() && !body.path("filter").isMissingNode() && !body.path("filter").isNull())
+            throw new ApiException(400, "Для фильтра поиска необходимо поле typeCode");
+        if (!type.isBlank()) validateFilter(type, body.path("filter"));
         int offset = Math.max(0, (int) number(body, "offset", 0));
         int limit = Math.min(10000, Math.max(1, (int) number(body, "limit", 1000)));
         QueryClause filter = compileFilter(body.path("filter"), new Counter());
-        String where = "d.type_code = :type" + (filter.sql().isEmpty() ? "" : " and " + filter.sql());
+        String where = (type.isBlank() ? "true" : "d.type_code = :type") + (filter.sql().isEmpty() ? "" : " and " + filter.sql());
         JdbcClient.StatementSpec itemsQuery = jdbc.sql("select d.id, d.type_code, d.status, d.current_version, d.change_token, d.attributes, d.created_by, d.created_at from document d where " + where + " order by d.created_at desc, d.id asc offset :offset limit :limit")
-                .param("type", type).param("offset", offset).param("limit", limit);
-        JdbcClient.StatementSpec totalQuery = jdbc.sql("select count(*) from document d where " + where).param("type", type);
+                .param("offset", offset).param("limit", limit);
+        JdbcClient.StatementSpec totalQuery = jdbc.sql("select count(*) from document d where " + where);
+        if (!type.isBlank()) { itemsQuery = itemsQuery.param("type", type); totalQuery = totalQuery.param("type", type); }
         for (var parameter : filter.parameters().entrySet()) { itemsQuery = itemsQuery.param(parameter.getKey(), parameter.getValue()); totalQuery = totalQuery.param(parameter.getKey(), parameter.getValue()); }
         List<JsonNode> items = itemsQuery.query(this::snapshot).list();
         long total = totalQuery.query(Long.class).single();
